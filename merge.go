@@ -11,6 +11,7 @@ package mergo
 import (
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 func hasMergeableFields(dst reflect.Value) (exported bool) {
@@ -86,12 +87,31 @@ func deepMerge(dst, src reflect.Value, visited map[uintptr]*visit, depth int, co
 			return
 		}
 	}
-
 	switch dst.Kind() {
 	case reflect.Struct:
 		if hasMergeableFields(dst) {
 			for i, n := 0, dst.NumField(); i < n; i++ {
-				if err = deepMerge(dst.Field(i), src.Field(i), visited, depth+1, config); err != nil {
+				var (
+					dstField, srcField reflect.Value
+				)
+				keyStr := dst.Type().Field(i).Name
+				keyStr = strings.ToLower(keyStr)
+				key := reflect.ValueOf(keyStr)
+
+				dstField = dst.Field(i)
+
+				if src.Kind() == reflect.Map {
+					srcField = src.MapIndex(key)
+					if srcField.IsValid() {
+						srcField = srcField.Elem()
+					}
+				} else {
+					srcField = src.Field(i)
+				}
+				if !srcField.IsValid() {
+					continue
+				}
+				if err = deepMerge(dstField, srcField, visited, depth+1, config); err != nil {
 					return
 				}
 			}
@@ -150,9 +170,14 @@ func deepMerge(dst, src reflect.Value, visited map[uintptr]*visit, depth int, co
 							dstMapElm = reflect.ValueOf(dstMapElm.Interface())
 						}
 					}
-					if err = deepMerge(dstMapElm, srcMapElm, visited, depth+1, config); err != nil {
+					//Go map don't support accessing a key's value by reference,
+					//So created a new copy of data updated that and re-assigned to the initial destination.
+					dstMapElmCopy := reflect.New(dstMapElm.Type()).Elem()
+					dstMapElmCopy.Set(dstMapElm)
+					if err = deepMerge(dstMapElmCopy, srcMapElm, visited, depth+1, config); err != nil {
 						return
 					}
+					dst.SetMapIndex(key, dstMapElmCopy)
 				case reflect.Slice:
 					srcSlice := reflect.ValueOf(srcElement.Interface())
 
@@ -204,13 +229,14 @@ func deepMerge(dst, src reflect.Value, visited map[uintptr]*visit, depth int, co
 					continue
 				}
 			}
-
-			if srcElement.IsValid() && ((srcElement.Kind() != reflect.Ptr && overwrite) || !dstElement.IsValid() || isEmptyValue(dstElement, !config.ShouldNotDereference)) {
-				if dst.IsNil() {
-					dst.Set(reflect.MakeMap(dst.Type()))
-				}
-				dst.SetMapIndex(key, srcElement)
-			}
+			/* Don't know a use case of the below lines. */
+			//if srcElement.IsValid() && ((srcElement.Kind() != reflect.Ptr && overwrite) || !dstElement.IsValid() || isEmptyValue(dstElement, !config.ShouldNotDereference)) {
+			//	if dst.IsNil() {
+			//		dst.Set(reflect.MakeMap(dst.Type()))
+			//	}
+			//	fmt.Println(srcElement.Interface())
+			//	dst.SetMapIndex(key, srcElement)
+			//}
 		}
 
 		// Ensure that all keys in dst are deleted if they are not in src.
